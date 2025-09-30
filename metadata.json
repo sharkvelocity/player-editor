@@ -1,0 +1,5 @@
+{
+  "name": "PhasmaPhoney 3D Player Editor",
+  "description": "A 3D character editor built with React and Babylon.js. Load player models, maps, and animations. Retarget animations, manage bones, set up spawn points, and export the final character as a GLB file.",
+  "requestFramePermissions": []
+}
