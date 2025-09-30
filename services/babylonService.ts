@@ -17,7 +17,7 @@ export async function appendModelToScene(
     fileOrUrl: File | string,
     scene: any, // BABYLON.Scene
     options: AppendModelOptions = {}
-): Promise<{ newMeshes: any[], newSkels: any[], newAG: any[] }> {
+): Promise<{ newMeshes: any[], newSkels: any[], newAG: any[], newTNs: any[] }> {
     const { hideMeshes = false, makeCollidable = false } = options;
     
     const url = typeof fileOrUrl === "string" ? fileOrUrl : URL.createObjectURL(fileOrUrl);
@@ -28,12 +28,12 @@ export async function appendModelToScene(
         result = await BABYLON.SceneLoader.ImportMeshAsync(null, "", url, scene, undefined, ".glb");
     } catch (e) {
         console.error("Error loading model:", e);
-        return { newMeshes: [], newSkels: [], newAG: [] };
+        return { newMeshes: [], newSkels: [], newAG: [], newTNs: [] };
     } finally {
         if (typeof fileOrUrl !== "string") URL.revokeObjectURL(url);
     }
     
-    const { meshes: newMeshes, skeletons: newSkels, animationGroups: newAG } = result;
+    const { meshes: newMeshes, skeletons: newSkels, animationGroups: newAG, transformNodes: newTNs } = result;
 
     newMeshes.forEach((mesh: any) => {
         if (hideMeshes) {
@@ -44,7 +44,7 @@ export async function appendModelToScene(
         }
     });
 
-    return { newMeshes, newSkels, newAG };
+    return { newMeshes, newSkels, newAG, newTNs };
 }
 
 /**
@@ -112,7 +112,7 @@ const boneKeywordMap: Record<string, string[]> = {
     'knee': ['knee'],
     'foot': ['foot'],
     'toes': ['toe', 'toes'],
-    'shoulder': ['shoulder', 'clavicle'],
+    'shoulder': ['shoulder', 'clavicle', 'breast', 'pec'],
     'arm': ['arm', 'bicep'],
     'elbow': ['elbow', 'forearm'],
     'hand': ['hand', 'wrist'],
@@ -166,6 +166,7 @@ function getBoneFeatures(normalizedName: string): { keywords: Set<string>, side:
 
 /**
  * Intelligently maps bone names from a source list to a target skeleton based on keywords.
+ * This version uses a non-greedy approach by scoring all possible pairs and matching the best ones first.
  * @param sourceBoneNames An array of bone names from the source skeleton.
  * @param targetSkeleton The target Babylon.js skeleton.
  * @returns A mapping table from source bone name to target bone name.
@@ -176,58 +177,84 @@ export function autoMapBones(
 ): Record<string, string> {
     const mapping: Record<string, string> = {};
     const targetBones = targetSkeleton.bones;
-    const availableTargetBones = new Set(targetBones.map((b: any) => b.name));
+    // FIX: Cast bone names to string to ensure the Set is of type Set<string>.
+    // This resolves downstream type errors where the loop variable was inferred as 'unknown'.
+    const targetBoneNames = new Set(targetBones.map((b: any) => b.name as string));
 
     const getScore = (sourceFeatures: ReturnType<typeof getBoneFeatures>, targetFeatures: ReturnType<typeof getBoneFeatures>): number => {
         let score = 0;
+        // Side scoring: Heavily weighted but allows for side-to-center matching.
         if (sourceFeatures.side === targetFeatures.side) {
-            score += 100;
-        } else if (sourceFeatures.side !== 'center' && targetFeatures.side !== 'center') {
-            return -1; // Don't map left to right
+            score += 50;
+        } else if (sourceFeatures.side === 'center' || targetFeatures.side === 'center') {
+            score += 25; // Lower score for mapping a side bone to a central one.
+        } else { // This is Left vs Right
+            return -1; // Invalid match.
         }
 
+        // Keyword scoring: Rewards shared understanding of the bone's purpose.
+        let keywordMatches = 0;
         for (const keyword of sourceFeatures.keywords) {
             if (targetFeatures.keywords.has(keyword)) {
-                score += 10;
+                keywordMatches++;
             }
         }
-        
-        if (sourceFeatures.keywords.size > 0 && targetFeatures.keywords.size > 0) {
+        score += keywordMatches * 20;
+
+        // Small tie-breaker bonus if both bones have keywords but none matched.
+        // This prioritizes matching two bones with semantic meaning over one with and one without.
+        if (sourceFeatures.keywords.size > 0 && targetFeatures.keywords.size > 0 && keywordMatches === 0) {
             score += 1;
         }
+        
         return score;
     };
 
+    // 1. Calculate scores for all possible pairs above a minimum threshold.
+    const allPairs: { source: string; target: string; score: number }[] = [];
     for (const sourceName of sourceBoneNames) {
         const normalizedSourceName = normalizeBoneName(sourceName);
         const sourceFeatures = getBoneFeatures(normalizedSourceName);
 
-        let bestMatch: string | null = null;
-        let bestScore = 0;
-
-        for (const targetBone of targetBones) {
-            const targetName = targetBone.name;
-            if (!availableTargetBones.has(targetName)) continue;
-
+        for (const targetName of targetBoneNames) {
             const normalizedTargetName = normalizeBoneName(targetName);
             const targetFeatures = getBoneFeatures(normalizedTargetName);
             
             const score = getScore(sourceFeatures, targetFeatures);
-
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = targetName;
+            if (score > 1) { // Use a threshold to ignore extremely weak matches.
+                allPairs.push({ source: sourceName, target: targetName, score: score });
             }
-        }
-
-        if (bestMatch && bestScore > 0) {
-            mapping[sourceName] = bestMatch;
-            availableTargetBones.delete(bestMatch); // Prevent one target bone from being mapped twice
-        } else {
-            // Fallback to 1:1 if no good match is found
-            mapping[sourceName] = sourceName;
         }
     }
 
+    // 2. Sort all pairs by score, highest to lowest.
+    allPairs.sort((a, b) => b.score - a.score);
+
+    const mappedSources = new Set<string>();
+    const usedTargets = new Set<string>();
+
+    // 3. Iterate through sorted pairs and create mappings for the best available matches first.
+    for (const pair of allPairs) {
+        if (!mappedSources.has(pair.source) && !usedTargets.has(pair.target)) {
+            mapping[pair.source] = pair.target;
+            mappedSources.add(pair.source);
+            usedTargets.add(pair.target);
+        }
+    }
+
+    // 4. Fallback for any source bones that didn't get mapped.
+    for (const sourceName of sourceBoneNames) {
+        if (!mappedSources.has(sourceName)) {
+            // Prefer a 1:1 mapping if the target bone exists and is unused.
+            if (targetBoneNames.has(sourceName) && !usedTargets.has(sourceName)) {
+                mapping[sourceName] = sourceName;
+                usedTargets.add(sourceName);
+            } else {
+                // Otherwise, map to self, even if it's a dead end. User can manually inspect and fix.
+                mapping[sourceName] = sourceName;
+            }
+        }
+    }
+    
     return mapping;
 }

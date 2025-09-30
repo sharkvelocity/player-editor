@@ -132,14 +132,17 @@ const App: React.FC = () => {
         setMapRootNode(root);
         setMapScale(1); // Reset scale on new map load
 
-        const { newMeshes } = await appendModelToScene(fileOrUrl, scene, { makeCollidable: true });
+        const { newMeshes, newTNs } = await appendModelToScene(fileOrUrl, scene, { makeCollidable: true });
         
-        // Find the root nodes among the new meshes (those without a parent that is also in the new set)
-        const newMeshesSet = new Set(newMeshes);
-        const rootMeshes = newMeshes.filter((m: any) => !m.parent || !newMeshesSet.has(m.parent));
+        // Combine all new nodes to correctly determine the hierarchy root(s)
+        const allNewNodes = [...newMeshes, ...newTNs];
+        const newNodesSet = new Set(allNewNodes);
+        
+        // Find the root nodes among ALL new nodes (those without a parent that is also in the new set)
+        const rootNodes = allNewNodes.filter((n: any) => !n.parent || !newNodesSet.has(n.parent));
 
-        rootMeshes.forEach((m: any) => {
-            m.parent = root;
+        rootNodes.forEach((n: any) => {
+            n.parent = root;
         });
 
         setMapMeshes(newMeshes); // Still store direct references for raycasting etc.
@@ -167,7 +170,7 @@ const App: React.FC = () => {
         let firstSkeletonProcessed = false;
 
         for (const file of Array.from(files)) {
-            const { newMeshes, newSkels, newAG } = await appendModelToScene(file, scene, { hideMeshes: true });
+            const { newMeshes, newSkels, newAG, newTNs } = await appendModelToScene(file, scene, { hideMeshes: true });
             const sourceSkeleton = newSkels[0];
             
             if (sourceSkeleton && !firstSkeletonProcessed) {
@@ -194,6 +197,7 @@ const App: React.FC = () => {
             }
             
             newMeshes.forEach((m: any) => m.dispose());
+            newTNs.forEach((n: any) => n.dispose());
             sourceSkeleton?.dispose();
         }
         
@@ -548,14 +552,16 @@ const App: React.FC = () => {
             const eyeOffset = new BABYLON.Vector3(0, 0.1, 0.15); // Offset from head bone pivot
             const worldEyePosition = BABYLON.Vector3.TransformCoordinates(eyeOffset, headBoneMatrix);
     
-            // Determine where the camera should look based on mouse input from devCam
+            // Determine camera orientation based on mouse input from devCam
             const cameraRotationMatrix = BABYLON.Matrix.RotationYawPitchRoll(devCam.rotation.y, devCam.rotation.x, 0);
-            const cameraForward = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0, 0, 1), cameraRotationMatrix);
-            const cameraTarget = worldEyePosition.add(cameraForward);
             
-            // Update the render camera
+            // Update the render camera. Using rotationQuaternion is more stable than setTarget.
             fpCam.position.copyFrom(worldEyePosition);
-            fpCam.setTarget(cameraTarget);
+            if (!fpCam.rotationQuaternion) {
+                fpCam.rotationQuaternion = BABYLON.Quaternion.FromRotationMatrix(cameraRotationMatrix);
+            } else {
+                BABYLON.Quaternion.FromRotationMatrixToRef(cameraRotationMatrix, fpCam.rotationQuaternion);
+            }
         });
     
         return () => {
