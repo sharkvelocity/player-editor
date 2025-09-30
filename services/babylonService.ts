@@ -99,3 +99,135 @@ export async function exportGLB(
     });
     glb.downloadFiles();
 }
+
+
+// --- Auto-Mapping Logic ---
+
+const boneKeywordMap: Record<string, string[]> = {
+    'head': ['head'],
+    'neck': ['neck'],
+    'spine': ['spine', 'chest'],
+    'hips': ['hips', 'pelvis'],
+    'leg': ['leg', 'thigh', 'shin'],
+    'knee': ['knee'],
+    'foot': ['foot'],
+    'toes': ['toe', 'toes'],
+    'shoulder': ['shoulder', 'clavicle'],
+    'arm': ['arm', 'bicep'],
+    'elbow': ['elbow', 'forearm'],
+    'hand': ['hand', 'wrist'],
+    'finger': ['finger'],
+    'thumb': ['thumb'],
+    'index': ['index'],
+    'middle': ['middle'],
+    'ring': ['ring'],
+    'pinky': ['pinky', 'little'],
+};
+
+const sideIdentifiers = {
+    'left': ['l', 'left'],
+    'right': ['r', 'right'],
+};
+
+function normalizeBoneName(name: string): string {
+    return name.toLowerCase().replace(/[-_.:]/g, '');
+}
+
+function getBoneFeatures(normalizedName: string): { keywords: Set<string>, side: 'left' | 'right' | 'center' } {
+    const features = {
+        keywords: new Set<string>(),
+        side: 'center' as 'left' | 'right' | 'center',
+    };
+
+    for (const s of sideIdentifiers.left) {
+        if (normalizedName.includes(s)) {
+            features.side = 'left';
+            break;
+        }
+    }
+    if (features.side === 'center') {
+        for (const s of sideIdentifiers.right) {
+            if (normalizedName.includes(s)) {
+                features.side = 'right';
+                break;
+            }
+        }
+    }
+    
+    for (const [standard, variations] of Object.entries(boneKeywordMap)) {
+        for (const variation of variations) {
+            if (normalizedName.includes(variation)) {
+                features.keywords.add(standard);
+            }
+        }
+    }
+    return features;
+}
+
+/**
+ * Intelligently maps bone names from a source list to a target skeleton based on keywords.
+ * @param sourceBoneNames An array of bone names from the source skeleton.
+ * @param targetSkeleton The target Babylon.js skeleton.
+ * @returns A mapping table from source bone name to target bone name.
+ */
+export function autoMapBones(
+    sourceBoneNames: string[],
+    targetSkeleton: any // BABYLON.Skeleton
+): Record<string, string> {
+    const mapping: Record<string, string> = {};
+    const targetBones = targetSkeleton.bones;
+    const availableTargetBones = new Set(targetBones.map((b: any) => b.name));
+
+    const getScore = (sourceFeatures: ReturnType<typeof getBoneFeatures>, targetFeatures: ReturnType<typeof getBoneFeatures>): number => {
+        let score = 0;
+        if (sourceFeatures.side === targetFeatures.side) {
+            score += 100;
+        } else if (sourceFeatures.side !== 'center' && targetFeatures.side !== 'center') {
+            return -1; // Don't map left to right
+        }
+
+        for (const keyword of sourceFeatures.keywords) {
+            if (targetFeatures.keywords.has(keyword)) {
+                score += 10;
+            }
+        }
+        
+        if (sourceFeatures.keywords.size > 0 && targetFeatures.keywords.size > 0) {
+            score += 1;
+        }
+        return score;
+    };
+
+    for (const sourceName of sourceBoneNames) {
+        const normalizedSourceName = normalizeBoneName(sourceName);
+        const sourceFeatures = getBoneFeatures(normalizedSourceName);
+
+        let bestMatch: string | null = null;
+        let bestScore = 0;
+
+        for (const targetBone of targetBones) {
+            const targetName = targetBone.name;
+            if (!availableTargetBones.has(targetName)) continue;
+
+            const normalizedTargetName = normalizeBoneName(targetName);
+            const targetFeatures = getBoneFeatures(normalizedTargetName);
+            
+            const score = getScore(sourceFeatures, targetFeatures);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = targetName;
+            }
+        }
+
+        if (bestMatch && bestScore > 0) {
+            mapping[sourceName] = bestMatch;
+            availableTargetBones.delete(bestMatch); // Prevent one target bone from being mapped twice
+        } else {
+            // Fallback to 1:1 if no good match is found
+            mapping[sourceName] = sourceName;
+        }
+    }
+
+    return mapping;
+}

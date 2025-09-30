@@ -14,7 +14,7 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
 );
 
 const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'danger' }> = ({ children, className, variant = 'primary', ...props }) => {
-    const baseClasses = "px-2.5 py-2 text-left w-full rounded cursor-pointer transition-colors duration-150 text-sm";
+    const baseClasses = "px-2.5 py-2 text-left w-full rounded cursor-pointer transition-colors duration-150 text-sm disabled:opacity-50 disabled:cursor-not-allowed";
     const variantClasses = {
         primary: "bg-transparent text-cyan-400 border border-cyan-400/20 hover:bg-cyan-400/10",
         danger: "bg-transparent text-red-400 border border-red-400/20 hover:bg-red-400/10",
@@ -84,12 +84,15 @@ interface SidePanelProps {
     mapScale: number;
     setMapScale: React.Dispatch<React.SetStateAction<number>>;
     onApplyMapScale: () => void;
+    sourceBoneNames: string[] | null;
+    onAutoMapBones: () => void;
 }
 
 const SidePanel: React.FC<SidePanelProps> = (props) => {
-    const { logs, onLoadBase, onLoadMap, onScanAnimations, baseSkeleton, retargetedGroups, setRetargetedGroups, selectedAnimations, setSelectedAnimations, onExport, onSaveSpawnNode, onToggleDevCam, spawnCoords, baseMeshes, addLog, setMappingTable, mappingTable, playerModels, mapModels, editorMode, onToggleTestMode, animationLinks, setAnimationLinks, headBoneName, setHeadBoneName, onExportMap, mapScale, setMapScale, onApplyMapScale } = props;
+    const { logs, onLoadBase, onLoadMap, onScanAnimations, baseSkeleton, retargetedGroups, setRetargetedGroups, selectedAnimations, setSelectedAnimations, onExport, onSaveSpawnNode, onToggleDevCam, spawnCoords, baseMeshes, addLog, setMappingTable, mappingTable, playerModels, mapModels, editorMode, onToggleTestMode, animationLinks, setAnimationLinks, headBoneName, setHeadBoneName, onExportMap, mapScale, setMapScale, onApplyMapScale, sourceBoneNames, onAutoMapBones } = props;
 
     const [boneSearch, setBoneSearch] = useState('');
+    const [mappingSearch, setMappingSearch] = useState('');
     const [playerScale, setPlayerScale] = useState(1);
 
     const { baseAnimations, fileAnimations } = useMemo(() => {
@@ -147,17 +150,32 @@ const SidePanel: React.FC<SidePanelProps> = (props) => {
         return baseSkeleton.bones.filter((bone: any) => bone.name.toLowerCase().includes(boneSearch.toLowerCase()));
     }, [baseSkeleton, boneSearch]);
 
+    const filteredMapping = useMemo(() => {
+        if (!mappingTable) return [];
+        const searchTerm = mappingSearch.toLowerCase();
+        return Object.entries(mappingTable).filter(([source, target]) =>
+            source.toLowerCase().includes(searchTerm) ||
+            target.toLowerCase().includes(searchTerm)
+        );
+    }, [mappingTable, mappingSearch]);
+
     const playAnim = (animGroup: any) => {
+        if (!animGroup || animGroup.targetedAnimations.length === 0) {
+            addLog(`Cannot play "${animGroup.name}": animation is empty, check bone mapping.`);
+            return;
+        }
+        
+        // Stop any other animations that might be playing.
         retargetedGroups.forEach(ag => {
             if (ag.isPlaying && ag !== animGroup) {
                 ag.stop();
             }
         });
-        if (animGroup.isPaused) {
-            animGroup.play(true);
-        } else {
-            animGroup.start(true, 1.0, animGroup.from, animGroup.to, false);
-        }
+
+        // Always restart the animation from the beginning on loop.
+        // This provides consistent behavior for the play button.
+        animGroup.stop();
+        animGroup.play(true);
     };
     const pauseAnim = (animGroup: any) => animGroup.pause();
     const stopAnim = (animGroup: any) => animGroup.stop();
@@ -358,11 +376,43 @@ const SidePanel: React.FC<SidePanelProps> = (props) => {
             
              <Section title="Remapper & Mappings">
                 <div className="flex gap-2">
+                    <Button
+                        onClick={onAutoMapBones}
+                        disabled={!baseSkeleton || !sourceBoneNames}
+                        title={!baseSkeleton || !sourceBoneNames ? "Load a base model and an animation file first" : "Guess bone mapping based on keywords"}
+                    >
+                        Auto-Map Bones
+                    </Button>
                     <Button onClick={handleSaveMapping}>Save Mapping</Button>
                 </div>
                 <Label>Load mapping JSON</Label>
                 <FileInput onChange={handleLoadMapping} accept=".json" />
-                <p className="text-xs text-cyan-300/80 mt-1">Mapping JSON maps animation-bone → base-bone by name. Useful for Mixamo vs custom rigs.</p>
+                <p className="text-xs text-cyan-300/80 mt-1">Auto-map guesses bone links. Save the result and re-import animations to apply.</p>
+
+                <div className="mt-2 pt-2 border-t border-white/5">
+                    <Label>Current Bone Mapping</Label>
+                    <input
+                        className="w-full p-1.5 rounded bg-slate-950 border border-white/10 text-cyan-200 text-sm mb-2"
+                        placeholder="Search mapping..."
+                        value={mappingSearch}
+                        onChange={(e) => setMappingSearch(e.target.value)}
+                    />
+                    <div className="max-h-40 overflow-auto p-1.5 border border-dashed border-cyan-400/10 rounded-md text-xs space-y-1">
+                        {filteredMapping.length > 0 ? (
+                            filteredMapping.map(([source, target]) => (
+                                <div key={source} className="grid grid-cols-2 gap-2 items-center">
+                                    <span className="text-cyan-300 truncate" title={source}>{source}</span>
+                                    <div className="flex items-center">
+                                        <span className="text-cyan-400/50 mr-2">→</span>
+                                        <span className="text-cyan-100 truncate" title={target}>{target}</span>
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <p className="text-cyan-300/60 p-1">No mapping loaded or search term matched.</p>
+                        )}
+                    </div>
+                </div>
             </Section>
 
             <Section title="Spawn / Dev Camera">

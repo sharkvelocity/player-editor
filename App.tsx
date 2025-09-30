@@ -3,7 +3,7 @@ import BabylonCanvas from './components/BabylonCanvas';
 import SidePanel from './components/SidePanel';
 import type { BabylonInjectedContext, LogEntry, ImportedAnimFile, RetargetedAnimGroup, PlayerAction } from './types';
 import { initialAnimationLinks } from './types';
-import { appendModelToScene, exportGLB, retargetAnimationGroup } from './services/babylonService';
+import { appendModelToScene, exportGLB, retargetAnimationGroup, autoMapBones } from './services/babylonService';
 import { useLogger } from './hooks/useLogger';
 
 // Add a global declaration for the BABYLON object to satisfy TypeScript
@@ -19,7 +19,7 @@ const playerModels = [
 ];
 
 const mapModels = [
-    { name: 'Default Map (Mansion)', url: 'https://assets.babylonjs.com/meshes/Mansion/Mansion.glb' },
+    { name: 'Default Map (Mansion)', url: 'https://assets.babylonjs.com/meshes/Mansion.glb' },
     { name: 'Courtyard', url: 'https://assets.babylonjs.com/meshes/country.glb' },
     { name: 'Espilit', url: 'https://assets.babylonjs.com/meshes/espilit.glb' },
     { name: 'Studio', url: 'https://www.babylonjs-playground.com/scenes/StudioScene.glb' },
@@ -34,6 +34,7 @@ const App: React.FC = () => {
     const [baseMeshes, setBaseMeshes] = useState<any[]>([]); // BABYLON.AbstractMesh[]
     const [mapMeshes, setMapMeshes] = useState<any[]>([]); // BABYLON.AbstractMesh[]
     const [baseSkeleton, setBaseSkeleton] = useState<any | null>(null); // BABYLON.Skeleton | null
+    const [sourceBoneNames, setSourceBoneNames] = useState<string[] | null>(null);
     const [importedAnimFiles, setImportedAnimFiles] = useState<ImportedAnimFile[]>([]);
     const [retargetedGroups, setRetargetedGroups] = useState<RetargetedAnimGroup[]>([]);
     const [selectedAnimations, setSelectedAnimations] = useState<Set<string>>(new Set());
@@ -163,11 +164,19 @@ const App: React.FC = () => {
 
         addLog(`Scanning ${files.length} animation file(s)...`);
         const newRetargetedGroups: RetargetedAnimGroup[] = [];
+        let firstSkeletonProcessed = false;
 
         for (const file of Array.from(files)) {
             const { newMeshes, newSkels, newAG } = await appendModelToScene(file, scene, { hideMeshes: true });
             const sourceSkeleton = newSkels[0];
             
+            if (sourceSkeleton && !firstSkeletonProcessed) {
+                const boneNames = sourceSkeleton.bones.map((b: any) => b.name);
+                setSourceBoneNames(boneNames);
+                firstSkeletonProcessed = true;
+                addLog(`Captured source skeleton with ${boneNames.length} bones from ${file.name} for auto-mapping.`);
+            }
+
             if (newAG && newAG.length > 0) {
                 addLog(`Found ${newAG.length} animation(s) in ${file.name}. Retargeting...`);
                 for (const sourceAnimGroup of newAG) {
@@ -195,6 +204,17 @@ const App: React.FC = () => {
             return newSet;
         });
     }, [addLog, baseSkeleton, mappingTable]);
+
+    const handleAutoMapBones = useCallback(() => {
+        if (!baseSkeleton || !sourceBoneNames) {
+            addLog('Error: Load a base model and an animation file first.');
+            return;
+        }
+        addLog('Attempting to auto-map bones based on keywords...');
+        const newMapping = autoMapBones(sourceBoneNames, baseSkeleton);
+        setMappingTable(newMapping);
+        addLog('Auto-mapping complete. Review the updated mapping below. You must re-import animation files to apply it.');
+    }, [addLog, baseSkeleton, sourceBoneNames]);
 
     const handleExport = useCallback(async () => {
         if (!babylonContext.current || baseMeshes.length === 0) {
@@ -375,7 +395,7 @@ const App: React.FC = () => {
         if (editorMode !== 'test') {
             return;
         }
-
+    
         if (!headBoneName) {
             addLog('Error: Please select a head bone for first-person test mode.');
             setEditorMode('editor');
@@ -387,28 +407,33 @@ const App: React.FC = () => {
             setEditorMode('editor');
             return;
         }
-
+    
         addLog('Entering test mode...');
         const playerRoot = baseMeshes.find(m => m.skeleton === baseSkeleton) || baseMeshes[0];
         
-        // Position the camera at the spawn point before starting.
-        const startPosition = spawnNode ? spawnNode.getAbsolutePosition() : new BABYLON.Vector3(0, 2, 0);
-        startPosition.y += 0.1; // Raise spawn point slightly to prevent getting stuck in floor
-        const startRotation = spawnNode ? spawnNode.rotation.clone() : new BABYLON.Vector3(0, Math.PI, 0); // Default to facing forward
-
-        devCam.position.copyFrom(startPosition);
-        devCam.rotation.copyFrom(startRotation);
-
-        if (!spawnNode) {
+        let startPosition;
+        if (spawnNode) {
+            startPosition = spawnNode.getAbsolutePosition();
+            startPosition.y += devCam.ellipsoid.y; // Position camera so capsule BOTTOM is at spawn point
+        } else {
+            startPosition = new BABYLON.Vector3(0, 2, 0); // Default start position for camera
             addLog('Warning: No spawn point set. Starting at world origin.');
         }
-
-        const originalMinZ = devCam.minZ;
+        const startRotation = spawnNode ? spawnNode.rotation.clone() : new BABYLON.Vector3(0, Math.PI, 0);
+    
+        devCam.position.copyFrom(startPosition);
+        devCam.rotation.copyFrom(startRotation);
+    
         const previousCamera = scene.activeCamera;
-        scene.activeCamera.detachControl();
-        scene.activeCamera = devCam;
+        previousCamera.detachControl();
+        
+        // Create a dedicated first-person camera for rendering.
+        const fpCam = new BABYLON.FreeCamera("firstPersonCam", BABYLON.Vector3.Zero(), scene);
+        fpCam.minZ = 0.1;
+        scene.activeCamera = fpCam;
+    
+        // devCam now acts as the invisible physics capsule, but it still needs to receive input.
         devCam.attachControl(canvas, true);
-
         devCam.keysUp = [87]; devCam.keysDown = [83]; devCam.keysLeft = [65]; devCam.keysRight = [68];
         devCam.inertia = 0.9;
         devCam.angularSensibility = 500;
@@ -424,8 +449,7 @@ const App: React.FC = () => {
         let lastRotationY = devCam.rotation.y;
         const rotationThreshold = 0.005;
         let cWasDown = false;
-        let capsulePosition: any | null = null; // BABYLON.Vector3
-
+    
         const getAnim = (name: string | null): any | null => name ? retargetedGroups.find(ag => ag.name === name) || null : null;
         
         const playAnimLoop = (animName: string | null) => {
@@ -450,7 +474,7 @@ const App: React.FC = () => {
                 onEnd();
             }
         };
-
+    
         const FALL_Y_THRESHOLD = -20;
         
         const beforeObserver = scene.onBeforeRenderObservable.add(() => {
@@ -461,11 +485,11 @@ const App: React.FC = () => {
             const isMoving = isMovingForward || isMovingBackward || isStrafingLeft || isStrafingRight;
             const isSprinting = !!inputMap['shift'];
             const cIsDown = !!inputMap['c'];
-
+    
             const deltaRotationY = devCam.rotation.y - lastRotationY;
             const isTurningLeft = deltaRotationY > rotationThreshold;
             const isTurningRight = deltaRotationY < -rotationThreshold;
-
+    
             if (cIsDown && !cWasDown) {
                 if (playerState === 'standing') playerState = 'to_crouch';
                 else if (playerState === 'crouching') playerState = 'to_stand';
@@ -476,7 +500,7 @@ const App: React.FC = () => {
             devCam.speed = isCrouched ? 2 : (isSprinting && isMovingForward ? 8 : 4);
             const targetEllipsoidHeight = isCrouched ? 0.5 : 1;
             devCam.ellipsoid.y = BABYLON.Scalar.Lerp(devCam.ellipsoid.y, targetEllipsoidHeight, 0.1);
-
+    
             switch (playerState) {
                 case 'standing':
                     if (isSprinting && isMovingForward) playAnimLoop(animationLinks.run);
@@ -503,7 +527,7 @@ const App: React.FC = () => {
                     break;
             }
             lastRotationY = devCam.rotation.y;
-
+    
             if (devCam.position.y < FALL_Y_THRESHOLD) {
                 const respawnPosition = spawnNode
                     ? spawnNode.position.clone()
@@ -511,46 +535,47 @@ const App: React.FC = () => {
                 devCam.position.copyFrom(respawnPosition);
                 addLog('Fell off map, respawning...');
             }
-
+    
+            // Sync player mesh to the invisible physics capsule (devCam)
             playerRoot.position.copyFrom(devCam.position);
             playerRoot.position.y -= devCam.ellipsoid.y;
             playerRoot.rotationQuaternion = null;
             playerRoot.rotation.y = devCam.rotation.y;
-
             playerRoot.computeWorldMatrix(true);
-
-            capsulePosition = devCam.position.clone();
-            
+    
+            // Calculate the correct render camera (fpCam) position and orientation
             const headBoneMatrix = headBone.getAbsoluteMatrix();
-            const eyeOffset = new BABYLON.Vector3(0, 0.1, 0.15); // 10cm up, 15cm forward
+            const eyeOffset = new BABYLON.Vector3(0, 0.1, 0.15); // Offset from head bone pivot
             const worldEyePosition = BABYLON.Vector3.TransformCoordinates(eyeOffset, headBoneMatrix);
-            devCam.position.copyFrom(worldEyePosition);
+    
+            // Determine where the camera should look based on mouse input from devCam
+            const cameraRotationMatrix = BABYLON.Matrix.RotationYawPitchRoll(devCam.rotation.y, devCam.rotation.x, 0);
+            const cameraForward = BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0, 0, 1), cameraRotationMatrix);
+            const cameraTarget = worldEyePosition.add(cameraForward);
+            
+            // Update the render camera
+            fpCam.position.copyFrom(worldEyePosition);
+            fpCam.setTarget(cameraTarget);
         });
-
-        const afterObserver = scene.onAfterRenderObservable.add(() => {
-            if (capsulePosition) {
-                devCam.position.copyFrom(capsulePosition);
-                capsulePosition = null;
-            }
-        });
-
+    
         return () => {
             addLog('Exiting test mode...');
             window.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('keyup', onKeyUp);
             scene.onBeforeRenderObservable.remove(beforeObserver);
-            scene.onAfterRenderObservable.remove(afterObserver);
             currentAnim?.stop();
-            devCam.minZ = originalMinZ; // Restore near clip plane
-            devCam.ellipsoid.y = 1;
+            
+            fpCam.dispose(); // Clean up the dedicated first-person camera
+            
+            devCam.ellipsoid.y = 1; // Restore ellipsoid
             devCam.keysUp = []; devCam.keysDown = []; devCam.keysLeft = []; devCam.keysRight = [];
             devCam.detachControl();
-
+    
             // Restore the editor camera to a predictable state, looking at the player.
             if (previousCamera && playerRoot) {
                 const playerPosition = playerRoot.getAbsolutePosition();
                 const playerMidPoint = playerPosition.add(new BABYLON.Vector3(0, 1, 0));
-
+    
                 if (previousCamera.name === 'arcCam') {
                     const arcCam = previousCamera as any; // BABYLON.ArcRotateCamera
                     arcCam.target = playerMidPoint;
@@ -566,11 +591,11 @@ const App: React.FC = () => {
                     previousCamera.setTarget(playerMidPoint);
                 }
             }
-
+    
             scene.activeCamera = previousCamera;
             scene.activeCamera.attachControl(canvas, true);
         };
-
+    
     }, [editorMode, baseMeshes, addLog, retargetedGroups, animationLinks, baseSkeleton, headBoneName, spawnNode]);
 
     return (
@@ -605,6 +630,8 @@ const App: React.FC = () => {
                 mapScale={mapScale}
                 setMapScale={setMapScale}
                 onApplyMapScale={handleApplyMapScale}
+                sourceBoneNames={sourceBoneNames}
+                onAutoMapBones={handleAutoMapBones}
             />
             <div className="flex-1 p-3 pl-0">
                 <div className="w-full h-full rounded-md overflow-hidden shadow-2xl shadow-black/50">
