@@ -155,9 +155,27 @@ const SidePanel: React.FC<SidePanelProps> = (props) => {
         const searchTerm = mappingSearch.toLowerCase();
         return Object.entries(mappingTable).filter(([source, target]) =>
             source.toLowerCase().includes(searchTerm) ||
-            target.toLowerCase().includes(searchTerm)
-        );
+            (target && target.toLowerCase().includes(searchTerm))
+        ).sort((a, b) => a[0].localeCompare(b[0]));
     }, [mappingTable, mappingSearch]);
+
+    const targetBoneOptions = useMemo(() => {
+        if (!baseSkeleton) return [];
+        const sortedBones = [...baseSkeleton.bones].sort((a: any, b: any) => a.name.localeCompare(b.name));
+        return [
+            <option key="unmapped" value="">-- Unmapped --</option>,
+            ...sortedBones.map((bone: any) => (
+                <option key={bone.id} value={bone.name}>{bone.name}</option>
+            ))
+        ];
+    }, [baseSkeleton]);
+    
+    const handleMappingChange = useCallback((sourceBone: string, newTargetBone: string) => {
+        setMappingTable(prev => ({
+            ...prev,
+            [sourceBone]: newTargetBone,
+        }));
+    }, [setMappingTable]);
 
     const playAnim = (animGroup: any) => {
         if (!animGroup || animGroup.targetedAnimations.length === 0) {
@@ -397,15 +415,18 @@ const SidePanel: React.FC<SidePanelProps> = (props) => {
                         value={mappingSearch}
                         onChange={(e) => setMappingSearch(e.target.value)}
                     />
-                    <div className="max-h-40 overflow-auto p-1.5 border border-dashed border-cyan-400/10 rounded-md text-xs space-y-1">
+                    <div className="max-h-60 overflow-auto p-1.5 border border-dashed border-cyan-400/10 rounded-md text-xs space-y-1.5">
                         {filteredMapping.length > 0 ? (
                             filteredMapping.map(([source, target]) => (
-                                <div key={source} className="grid grid-cols-2 gap-2 items-center">
+                                <div key={source} className="grid grid-cols-[1fr,auto,1fr] gap-2 items-center">
                                     <span className="text-cyan-300 truncate" title={source}>{source}</span>
-                                    <div className="flex items-center">
-                                        <span className="text-cyan-400/50 mr-2">→</span>
-                                        <span className="text-cyan-100 truncate" title={target}>{target}</span>
-                                    </div>
+                                    <span className="text-cyan-400/50">→</span>
+                                    <Select
+                                        value={target}
+                                        onChange={(e) => handleMappingChange(source, e.target.value)}
+                                    >
+                                        {targetBoneOptions}
+                                    </Select>
                                 </div>
                             ))
                         ) : (

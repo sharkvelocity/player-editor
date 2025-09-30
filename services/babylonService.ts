@@ -67,13 +67,19 @@ export function retargetAnimationGroup(
         const sourceAnimation = targetedAnim.animation;
         const sourceBoneName = (targetedAnim.target as any).name; // as BABYLON.Bone
 
-        const targetBoneName = mapping[sourceBoneName] || sourceBoneName;
-        const targetBone = targetSkeleton.bones.find((b: any) => b.name === targetBoneName);
+        // New logic: Check for an explicit, non-empty mapping.
+        const targetBoneName = mapping[sourceBoneName];
         
-        if (targetBone) {
-            const newAnimation = sourceAnimation.clone();
-            newAnimationGroup.addTargetedAnimation(newAnimation, targetBone);
+        // If targetBoneName is defined and not an empty string, proceed.
+        if (targetBoneName) {
+            const targetBone = targetSkeleton.bones.find((b: any) => b.name === targetBoneName);
+            
+            if (targetBone) {
+                const newAnimation = sourceAnimation.clone();
+                newAnimationGroup.addTargetedAnimation(newAnimation, targetBone);
+            }
         }
+        // If targetBoneName is empty ('') or undefined, we intentionally skip this bone's animation track.
     }
     
     newAnimationGroup.normalize(sourceAnimGroup.from, sourceAnimGroup.to);
@@ -177,9 +183,9 @@ export function autoMapBones(
 ): Record<string, string> {
     const mapping: Record<string, string> = {};
     const targetBones = targetSkeleton.bones;
-    // FIX: Cast bone names to string to ensure the Set is of type Set<string>.
+    // FIX: Explicitly type the Set as Set<string> to ensure correct type inference for loop variables.
     // This resolves downstream type errors where the loop variable was inferred as 'unknown'.
-    const targetBoneNames = new Set(targetBones.map((b: any) => b.name as string));
+    const targetBoneNames = new Set<string>(targetBones.map((b: any) => b.name));
 
     const getScore = (sourceFeatures: ReturnType<typeof getBoneFeatures>, targetFeatures: ReturnType<typeof getBoneFeatures>): number => {
         let score = 0;
