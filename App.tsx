@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import BabylonCanvas from './components/BabylonCanvas';
 import SidePanel from './components/SidePanel';
+import VisualMapper from './components/VisualMapper';
 import type { BabylonInjectedContext, LogEntry, ImportedAnimFile, RetargetedAnimGroup, PlayerAction } from './types';
 import { initialAnimationLinks } from './types';
 import { appendModelToScene, exportGLB, retargetAnimationGroup, autoMapBones } from './services/babylonService';
@@ -36,6 +37,7 @@ const App: React.FC = () => {
     const [baseMeshes, setBaseMeshes] = useState<any[]>([]); // BABYLON.AbstractMesh[]
     const [mapMeshes, setMapMeshes] = useState<any[]>([]); // BABYLON.AbstractMesh[]
     const [baseSkeleton, setBaseSkeleton] = useState<any | null>(null); // BABYLON.Skeleton | null
+    const [sourceSkeleton, setSourceSkeleton] = useState<any | null>(null); // BABYLON.Skeleton | null
     const [sourceBoneNames, setSourceBoneNames] = useState<string[] | null>(null);
     const [importedAnimFiles, setImportedAnimFiles] = useState<ImportedAnimFile[]>([]);
     const [retargetedGroups, setRetargetedGroups] = useState<RetargetedAnimGroup[]>([]);
@@ -51,7 +53,11 @@ const App: React.FC = () => {
 
     const [mapRootNode, setMapRootNode] = useState<any | null>(null); // BABYLON.TransformNode
     const [mapScale, setMapScale] = useState(1);
-    const [highlightedBone, setHighlightedBone] = useState<string | null>(null);
+    
+    // State for Visual Mapper
+    const [visualMapperActive, setVisualMapperActive] = useState(false);
+    const [highlightedSourceBone, setHighlightedSourceBone] = useState<string | null>(null);
+    const [highlightedTargetBone, setHighlightedTargetBone] = useState<string | null>(null);
 
     const handleSceneReady = (context: BabylonInjectedContext) => {
         babylonContext.current = context;
@@ -174,13 +180,17 @@ const App: React.FC = () => {
 
         for (const file of Array.from(files)) {
             const { newMeshes, newSkels, newAG, newTNs } = await appendModelToScene(file, scene, { hideMeshes: true });
-            const sourceSkeleton = newSkels[0];
+            const sourceSkel = newSkels[0];
             
-            if (sourceSkeleton && !firstSkeletonProcessed) {
-                const boneNames = sourceSkeleton.bones.map((b: any) => b.name);
+            if (sourceSkel && !firstSkeletonProcessed) {
+                sourceSkeleton?.dispose(); // Dispose previous source skeleton if any
+                const clonedSkeleton = sourceSkel.clone(`sourceSkel_${file.name}`);
+                setSourceSkeleton(clonedSkeleton);
+
+                const boneNames = sourceSkel.bones.map((b: any) => b.name);
                 setSourceBoneNames(boneNames);
                 firstSkeletonProcessed = true;
-                addLog(`Captured source skeleton with ${boneNames.length} bones from ${file.name} for auto-mapping.`);
+                addLog(`Captured source skeleton with ${boneNames.length} bones from ${file.name} for visual mapping.`);
             }
 
             if (newAG && newAG.length > 0) {
@@ -201,7 +211,7 @@ const App: React.FC = () => {
             
             newMeshes.forEach((m: any) => m.dispose());
             newTNs.forEach((n: any) => n.dispose());
-            sourceSkeleton?.dispose();
+            sourceSkel?.dispose(); // We've cloned it, so we can dispose the original
         }
         
         setRetargetedGroups(prev => [...prev, ...newRetargetedGroups]);
@@ -210,18 +220,25 @@ const App: React.FC = () => {
             newRetargetedGroups.forEach(g => newSet.add(g.name));
             return newSet;
         });
-    }, [addLog, baseSkeleton, mappingTable]);
+    }, [addLog, baseSkeleton, mappingTable, sourceSkeleton]);
+
+    useEffect(() => {
+      if (baseSkeleton && sourceBoneNames) {
+        const suggestion = autoMapBones(sourceBoneNames, baseSkeleton);
+        setMappingTable(suggestion);
+        addLog('Ran auto-mapping. Please review the results in the Remapper section.');
+      }
+    }, [sourceBoneNames, baseSkeleton, addLog]);
 
     const handleAutoMapBones = useCallback(() => {
-        if (!baseSkeleton || !sourceBoneNames) {
+        if (!sourceBoneNames || !baseSkeleton) {
             addLog('Error: Load a base model and an animation file first.');
             return;
         }
-        addLog('Attempting to auto-map bones based on keywords...');
-        const newMapping = autoMapBones(sourceBoneNames, baseSkeleton);
-        setMappingTable(newMapping);
-        addLog('Auto-mapping complete. Review the updated mapping below. You must re-import animation files to apply it.');
-    }, [addLog, baseSkeleton, sourceBoneNames]);
+        const suggestion = autoMapBones(sourceBoneNames, baseSkeleton);
+        setMappingTable(suggestion);
+        addLog('Applied auto-mapping suggestions. Review and save.');
+    }, [addLog, sourceBoneNames, baseSkeleton]);
 
     const handleExport = useCallback(async () => {
         if (!babylonContext.current || baseMeshes.length === 0) {
@@ -395,9 +412,26 @@ const App: React.FC = () => {
 
     const handleToggleTestMode = () => setEditorMode(mode => mode === 'editor' ? 'test' : 'editor');
 
-    const handleToggleBoneHighlight = useCallback((boneName: string) => {
-        setHighlightedBone(current => (current === boneName ? null : boneName));
-    }, []);
+    const handleSelectBoneForMapping = useCallback((sourceBoneName: string, targetBoneName: string) => {
+        if (!sourceSkeleton) {
+            addLog("Cannot open visual mapper: an animation file with a skeleton must be loaded first.");
+            return;
+        }
+        setHighlightedSourceBone(sourceBoneName);
+        setHighlightedTargetBone(targetBoneName);
+        setVisualMapperActive(true);
+    }, [sourceSkeleton, addLog]);
+    
+    // This effect is used to update the target bone highlight in the visual mapper
+    // when the user changes it via the dropdown in the side panel.
+    useEffect(() => {
+        if (visualMapperActive && highlightedSourceBone) {
+            const currentTarget = mappingTable[highlightedSourceBone];
+            if (currentTarget !== highlightedTargetBone) {
+                setHighlightedTargetBone(currentTarget);
+            }
+        }
+    }, [mappingTable, visualMapperActive, highlightedSourceBone, highlightedTargetBone]);
 
     useEffect(() => {
         if (!babylonContext.current || !baseSkeleton) return;
@@ -406,9 +440,9 @@ const App: React.FC = () => {
         const existingHl = scene.getMeshByName(BONE_HIGHLIGHTER_NAME);
         existingHl?.dispose();
 
-        if (highlightedBone === null || highlightedBone === '') return;
+        if (highlightedTargetBone === null || highlightedTargetBone === '') return;
 
-        const boneToHighlight = baseSkeleton.bones.find((b: any) => b.name === highlightedBone);
+        const boneToHighlight = baseSkeleton.bones.find((b: any) => b.name === highlightedTargetBone);
         if (!boneToHighlight) return;
 
         const meshWithSkeleton = baseMeshes.find(m => m.skeleton === baseSkeleton);
@@ -428,7 +462,7 @@ const App: React.FC = () => {
         return () => {
             scene.getMeshByName(BONE_HIGHLIGHTER_NAME)?.dispose();
         };
-    }, [highlightedBone, baseSkeleton, baseMeshes]);
+    }, [highlightedTargetBone, baseSkeleton, baseMeshes]);
 
 
     useEffect(() => {
@@ -677,11 +711,22 @@ const App: React.FC = () => {
                 onApplyMapScale={handleApplyMapScale}
                 sourceBoneNames={sourceBoneNames}
                 onAutoMapBones={handleAutoMapBones}
-                highlightedBone={highlightedBone}
-                onToggleBoneHighlight={handleToggleBoneHighlight}
+                highlightedBone={highlightedTargetBone}
+                onSelectBoneForMapping={handleSelectBoneForMapping}
             />
-            <div className="flex-1 p-3 pl-0">
-                <div className="w-full h-full rounded-md overflow-hidden shadow-2xl shadow-black/50">
+            <div className="flex-1 flex flex-col p-3 pl-0">
+                 {visualMapperActive && babylonContext.current && (
+                    <VisualMapper
+                        babylonContext={babylonContext.current}
+                        baseSkeleton={baseSkeleton}
+                        sourceSkeleton={sourceSkeleton}
+                        baseMeshes={baseMeshes}
+                        highlightedTargetBoneName={highlightedTargetBone}
+                        highlightedSourceBoneName={highlightedSourceBone}
+                        onClose={() => setVisualMapperActive(false)}
+                    />
+                )}
+                <div className="flex-1 w-full rounded-md overflow-hidden shadow-2xl shadow-black/50 relative min-h-0">
                     <BabylonCanvas onSceneReady={handleSceneReady} />
                 </div>
             </div>

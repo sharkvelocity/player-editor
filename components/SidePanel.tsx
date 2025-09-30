@@ -87,11 +87,11 @@ interface SidePanelProps {
     sourceBoneNames: string[] | null;
     onAutoMapBones: () => void;
     highlightedBone: string | null;
-    onToggleBoneHighlight: (boneName: string) => void;
+    onSelectBoneForMapping: (sourceBoneName: string, targetBoneName: string) => void;
 }
 
 const SidePanel: React.FC<SidePanelProps> = (props) => {
-    const { logs, onLoadBase, onLoadMap, onScanAnimations, baseSkeleton, retargetedGroups, setRetargetedGroups, selectedAnimations, setSelectedAnimations, onExport, onSaveSpawnNode, onToggleDevCam, spawnCoords, baseMeshes, addLog, setMappingTable, mappingTable, playerModels, mapModels, editorMode, onToggleTestMode, animationLinks, setAnimationLinks, headBoneName, setHeadBoneName, onExportMap, mapScale, setMapScale, onApplyMapScale, sourceBoneNames, onAutoMapBones, highlightedBone, onToggleBoneHighlight } = props;
+    const { logs, onLoadBase, onLoadMap, onScanAnimations, baseSkeleton, retargetedGroups, setRetargetedGroups, selectedAnimations, setSelectedAnimations, onExport, onSaveSpawnNode, onToggleDevCam, spawnCoords, baseMeshes, addLog, setMappingTable, mappingTable, playerModels, mapModels, editorMode, onToggleTestMode, animationLinks, setAnimationLinks, headBoneName, setHeadBoneName, onExportMap, mapScale, setMapScale, onApplyMapScale, sourceBoneNames, onAutoMapBones, highlightedBone, onSelectBoneForMapping } = props;
 
     const [boneSearch, setBoneSearch] = useState('');
     const [mappingSearch, setMappingSearch] = useState('');
@@ -427,7 +427,7 @@ const SidePanel: React.FC<SidePanelProps> = (props) => {
                                             ? 'bg-cyan-400/20'
                                             : 'hover:bg-cyan-500/10'
                                     }`}
-                                    onClick={() => onToggleBoneHighlight(target)}
+                                    onClick={() => onSelectBoneForMapping(source, target)}
                                 >
                                     <span className="text-cyan-300 truncate" title={source}>{source}</span>
                                     <span className="text-cyan-400/50">→</span>
