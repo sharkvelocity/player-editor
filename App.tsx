@@ -27,6 +27,8 @@ const mapModels = [
     { name: 'Facilities', url: 'https://models.babylonjs.com/Facilities/Facilities.glb' },
 ];
 
+const BONE_HIGHLIGHTER_NAME = "__BONE_HIGHLIGHTER__";
+
 const App: React.FC = () => {
     const { logs, addLog } = useLogger();
     const babylonContext = useRef<BabylonInjectedContext | null>(null);
@@ -49,6 +51,7 @@ const App: React.FC = () => {
 
     const [mapRootNode, setMapRootNode] = useState<any | null>(null); // BABYLON.TransformNode
     const [mapScale, setMapScale] = useState(1);
+    const [highlightedBone, setHighlightedBone] = useState<string | null>(null);
 
     const handleSceneReady = (context: BabylonInjectedContext) => {
         babylonContext.current = context;
@@ -392,6 +395,42 @@ const App: React.FC = () => {
 
     const handleToggleTestMode = () => setEditorMode(mode => mode === 'editor' ? 'test' : 'editor');
 
+    const handleToggleBoneHighlight = useCallback((boneName: string) => {
+        setHighlightedBone(current => (current === boneName ? null : boneName));
+    }, []);
+
+    useEffect(() => {
+        if (!babylonContext.current || !baseSkeleton) return;
+        const { scene } = babylonContext.current;
+
+        const existingHl = scene.getMeshByName(BONE_HIGHLIGHTER_NAME);
+        existingHl?.dispose();
+
+        if (highlightedBone === null || highlightedBone === '') return;
+
+        const boneToHighlight = baseSkeleton.bones.find((b: any) => b.name === highlightedBone);
+        if (!boneToHighlight) return;
+
+        const meshWithSkeleton = baseMeshes.find(m => m.skeleton === baseSkeleton);
+        if (!meshWithSkeleton) return;
+
+        const hl = new BABYLON.MeshBuilder.CreateSphere(BONE_HIGHLIGHTER_NAME, { diameter: 0.06 }, scene);
+        const mat = new BABYLON.StandardMaterial(`${BONE_HIGHLIGHTER_NAME}_mat`, scene);
+        mat.emissiveColor = new BABYLON.Color3(0, 1, 0.7); // Bright cyan
+        mat.disableLighting = true;
+        mat.wireframe = true;
+        hl.material = mat;
+        
+        hl.isPickable = false;
+
+        hl.attachToBone(boneToHighlight, meshWithSkeleton);
+
+        return () => {
+            scene.getMeshByName(BONE_HIGHLIGHTER_NAME)?.dispose();
+        };
+    }, [highlightedBone, baseSkeleton, baseMeshes]);
+
+
     useEffect(() => {
         if (!babylonContext.current || baseMeshes.length === 0) return;
         const { scene, devCam, canvas } = babylonContext.current;
@@ -638,6 +677,8 @@ const App: React.FC = () => {
                 onApplyMapScale={handleApplyMapScale}
                 sourceBoneNames={sourceBoneNames}
                 onAutoMapBones={handleAutoMapBones}
+                highlightedBone={highlightedBone}
+                onToggleBoneHighlight={handleToggleBoneHighlight}
             />
             <div className="flex-1 p-3 pl-0">
                 <div className="w-full h-full rounded-md overflow-hidden shadow-2xl shadow-black/50">

@@ -86,10 +86,12 @@ interface SidePanelProps {
     onApplyMapScale: () => void;
     sourceBoneNames: string[] | null;
     onAutoMapBones: () => void;
+    highlightedBone: string | null;
+    onToggleBoneHighlight: (boneName: string) => void;
 }
 
 const SidePanel: React.FC<SidePanelProps> = (props) => {
-    const { logs, onLoadBase, onLoadMap, onScanAnimations, baseSkeleton, retargetedGroups, setRetargetedGroups, selectedAnimations, setSelectedAnimations, onExport, onSaveSpawnNode, onToggleDevCam, spawnCoords, baseMeshes, addLog, setMappingTable, mappingTable, playerModels, mapModels, editorMode, onToggleTestMode, animationLinks, setAnimationLinks, headBoneName, setHeadBoneName, onExportMap, mapScale, setMapScale, onApplyMapScale, sourceBoneNames, onAutoMapBones } = props;
+    const { logs, onLoadBase, onLoadMap, onScanAnimations, baseSkeleton, retargetedGroups, setRetargetedGroups, selectedAnimations, setSelectedAnimations, onExport, onSaveSpawnNode, onToggleDevCam, spawnCoords, baseMeshes, addLog, setMappingTable, mappingTable, playerModels, mapModels, editorMode, onToggleTestMode, animationLinks, setAnimationLinks, headBoneName, setHeadBoneName, onExportMap, mapScale, setMapScale, onApplyMapScale, sourceBoneNames, onAutoMapBones, highlightedBone, onToggleBoneHighlight } = props;
 
     const [boneSearch, setBoneSearch] = useState('');
     const [mappingSearch, setMappingSearch] = useState('');
@@ -415,15 +417,24 @@ const SidePanel: React.FC<SidePanelProps> = (props) => {
                         value={mappingSearch}
                         onChange={(e) => setMappingSearch(e.target.value)}
                     />
-                    <div className="max-h-60 overflow-auto p-1.5 border border-dashed border-cyan-400/10 rounded-md text-xs space-y-1.5">
+                    <div className="max-h-60 overflow-auto p-1.5 border border-dashed border-cyan-400/10 rounded-md text-xs space-y-1">
                         {filteredMapping.length > 0 ? (
                             filteredMapping.map(([source, target]) => (
-                                <div key={source} className="grid grid-cols-[1fr,auto,1fr] gap-2 items-center">
+                                <div
+                                    key={source}
+                                    className={`grid grid-cols-[1fr,auto,1fr] gap-2 items-center p-1 -mx-1 rounded transition-colors cursor-pointer ${
+                                        highlightedBone === target
+                                            ? 'bg-cyan-400/20'
+                                            : 'hover:bg-cyan-500/10'
+                                    }`}
+                                    onClick={() => onToggleBoneHighlight(target)}
+                                >
                                     <span className="text-cyan-300 truncate" title={source}>{source}</span>
                                     <span className="text-cyan-400/50">→</span>
                                     <Select
                                         value={target}
                                         onChange={(e) => handleMappingChange(source, e.target.value)}
+                                        onClick={(e) => e.stopPropagation()}
                                     >
                                         {targetBoneOptions}
                                     </Select>
